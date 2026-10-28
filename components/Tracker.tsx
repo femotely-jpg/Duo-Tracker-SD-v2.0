@@ -342,6 +342,9 @@ export default function Tracker() {
           {perm === "denied" && <span className="q">Alerts are blocked. Allow them in your browser settings.</span>}
           {perm === "unsupported" && <span className="q">This browser can’t show alerts. On iPhone, add this page to your Home Screen first.</span>}
         </div>
+        {data?.skipped && data.skipped.length > 0 && (
+          <p className="note">Apple doesn’t recognize {data.skipped.map(labelFor).join(" and ")}, so {data.skipped.length === 1 ? "it’s" : "they’re"} skipped. Check the part number in lib/config.ts.</p>
+        )}
         <p className="note">Buy links open the exact model on apple.com. Pick the store, then check out with Apple Pay. Always confirm pickup availability at checkout.</p>
       </section>
 
