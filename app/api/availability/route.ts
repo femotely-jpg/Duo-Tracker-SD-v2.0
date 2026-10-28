@@ -25,9 +25,27 @@ async function fetchZip(zip: string, parts: string[]): Promise<any[]> {
     },
     signal: AbortSignal.timeout(4500),
   });
-  if (!res.ok) throw new Error(`Apple returned ${res.status} for ZIP ${zip}`);
-  const json = await res.json();
-  return json?.body?.content?.pickupMessage?.stores ?? [];
+  const text = await res.text();
+  const snippet = text.slice(0, 160).replace(/\s+/g, " ");
+  if (!res.ok) {
+    console.error(`[apple] ZIP ${zip}: HTTP ${res.status} ${res.statusText}. Body: ${snippet}`);
+    throw new Error(`Apple returned ${res.status} for ZIP ${zip}`);
+  }
+  let json: any;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    console.error(`[apple] ZIP ${zip}: not JSON (HTTP ${res.status}). Body: ${snippet}`);
+    throw new Error(`Apple sent a web page instead of data for ZIP ${zip}`);
+  }
+  const stores = json?.body?.content?.pickupMessage?.stores;
+  if (!Array.isArray(stores)) {
+    console.error(`[apple] ZIP ${zip}: unexpected shape. Body: ${snippet}`);
+    throw new Error(`Apple's reply had no store list for ZIP ${zip}`);
+  }
+  const cities = stores.map((s: any) => `${s.storeName} (${s.city})`).join(", ");
+  console.log(`[apple] ZIP ${zip}: ${stores.length} stores: ${cities}`);
+  return stores;
 }
 
 async function load(): Promise<Payload> {
@@ -42,7 +60,9 @@ async function load(): Promise<Payload> {
 
   for (const r of results) {
     if (r.status === "rejected") {
-      errors.push(String(r.reason?.message ?? r.reason));
+      const msg = String(r.reason?.message ?? r.reason);
+      if (!errors.length) console.error(`[apple] request failed: ${msg}`);
+      errors.push(msg);
       continue;
     }
     for (const s of r.value) {
