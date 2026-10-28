@@ -192,7 +192,7 @@ export default function Tracker() {
   }, [drops, now]);
 
   // Map geometry
-  const W = 360, H = 400, CX = 214, CY = 300, SCALE = 3.2;
+  const W = 360, H = 380, CX = 190, CY = 260, SCALE = 7;
   const proj = (lat: number, lng: number) => {
     const m = toMiles(CENTER, lat, lng);
     return { x: CX + m.x * SCALE, y: CY - m.y * SCALE };
@@ -217,7 +217,7 @@ export default function Tracker() {
     ? "Part numbers go in lib/config.ts. The setup note below walks through it."
     : liveCount > 0
     ? `${live.map((s) => s.name).join(", ")}. Tap a store below to buy.`
-    : `Watching ${stores.length} stores from Orange County to the border.`;
+    : `Watching ${stores.length} stores across San Diego County.`;
 
   return (
     <main className="wrap">
@@ -248,7 +248,7 @@ export default function Tracker() {
       )}
 
       <div className="mapbox">
-        <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Map of ${stores.length} Apple Stores around San Diego`}>
+        <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Map of ${stores.length} Apple Stores in San Diego County`}>
           <path className="sea" d={seaPath} />
           {RINGS.map((r) => (
             <g key={r}>

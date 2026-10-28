@@ -1,6 +1,6 @@
 # Duo Tracker San Diego
 
-Live iPhone Duo in-store pickup availability for Apple Stores around San Diego (Fashion Valley, UTC, Carlsbad, Escondido, Otay Ranch, plus Temecula and south Orange County inside a 75 mile radius). Checks every 5 seconds, logs every drop, and alerts you when a model you want shows up.
+Live iPhone Duo in-store pickup availability for Apple Stores in San Diego County: Fashion Valley, UTC, Carlsbad, Escondido, and Otay Ranch. Checks every 5 seconds, logs every drop, and alerts you when a model you want shows up.
 
 ## 1. Part numbers
 
@@ -15,7 +15,7 @@ To run locally: `npm install`, then `npm run dev`, then open http://localhost:30
 
 ## How it works
 
-- `app/api/availability/route.ts` asks Apple's public pickup endpoint about each ZIP in `ZIPS`, merges the stores, drops anything outside `RADIUS_MILES`, and caches the answer for 4 seconds so several open phones share one request.
+- `app/api/availability/route.ts` asks Apple's public pickup endpoint about each ZIP in `ZIPS`, merges the stores, keeps only those whose city is on the `COUNTY_CITIES` list, and caches the answer for 4 seconds so several open phones share one request.
 - The page polls that route every 5 seconds (every 15 when the tab is in the background) and watches for a store flipping from sold out to available.
 - Drops and your alert picks are saved in the browser on that device.
 
@@ -23,6 +23,6 @@ To run locally: `npm install`, then `npm run dev`, then open http://localhost:30
 
 - Apple can throttle or block requests from cloud servers. If the status pill says "Apple not responding" for long stretches, lower the polling rate in `POLL_MS` or remove a ZIP.
 - Alerts fire while the page is open. On iPhone, add the site to your Home Screen (Share, Add to Home Screen), open it from there, and tap "Turn on alerts". For alerts with the app fully closed you would need a background worker plus Web Push, which this version does not include.
-- Want a different radius or more coverage? Change `ZIPS`, `RADIUS_MILES`, and `RINGS` in `lib/config.ts`.
+- To include Temecula or Orange County stores again, add their cities (for example "temecula", "mission viejo") to `COUNTY_CITIES` and raise `RADIUS_MILES`.
 
 Not affiliated with Apple. Always confirm availability at checkout.

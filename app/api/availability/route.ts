@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { CENTER, MODELS, RADIUS_MILES, ZIPS, isConfigured } from "@/lib/config";
+import { CENTER, MODELS, RADIUS_MILES, ZIPS, inCounty, isConfigured } from "@/lib/config";
 import { milesBetween } from "@/lib/geo";
 import type { Payload, Store } from "@/lib/types";
 
@@ -50,7 +50,7 @@ async function load(): Promise<Payload> {
       const lng = Number(s.storelongitude);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
       const distance = milesBetween(CENTER, { lat, lng });
-      if (distance > RADIUS_MILES) continue;
+      if (distance > RADIUS_MILES || !inCounty(String(s.city ?? ""))) continue;
       const id = String(s.storeNumber);
       const store: Store = merged.get(id) ?? {
         id,
