@@ -13,6 +13,5 @@ export type Payload = {
   configured: boolean;
   checkedAt: number;
   stores: Store[];
-  skipped?: string[];
   error?: string;
 };

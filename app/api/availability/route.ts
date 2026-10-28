@@ -11,50 +11,73 @@ const CACHE_MS = 4000;
 let cache: { at: number; payload: Payload } | null = null;
 let inflight: Promise<Payload> | null = null;
 
-// Part numbers Apple refused on their own. Skipped until the server restarts.
-const badParts = new Set<string>();
-
 class AppleError extends Error {
   constructor(public status: number, message: string) {
     super(message);
   }
 }
 
+// Apple's pickup lookup has been called several ways over the years. Apple answers a
+// request it doesn't accept with HTTP 541 "Page Not Found", so the route tries each
+// recipe once with one part number, then sticks with the first one Apple answers.
+type Recipe = { name: string; path: string; params: Record<string, string>; parts: "indexed" };
+const RECIPES: Recipe[] = [
+  { name: "unlocked-compact", path: "/shop/fulfillment-messages", params: { pl: "true", "mts.0": "regular", "mts.1": "compact", cppart: "UNLOCKED/US", searchNearby: "true" }, parts: "indexed" },
+  { name: "unlocked-plain", path: "/shop/fulfillment-messages", params: { pl: "true", mt: "compact", cppart: "UNLOCKED/US" }, parts: "indexed" },
+  { name: "fae-compact", path: "/shop/fulfillment-messages", params: { fae: "true", pl: "true", "mts.0": "regular", "mts.1": "compact" }, parts: "indexed" },
+  { name: "fae-little", path: "/shop/fulfillment-messages", params: { fae: "true", little: "false", fts: "true", "mts.0": "regular" }, parts: "indexed" },
+  { name: "retail-pickup", path: "/shop/retail/pickup-message", params: { pl: "true", cppart: "UNLOCKED/US" }, parts: "indexed" },
+];
+let recipe: Recipe | null = null;
+let lastProbe = 0;
+const PROBE_EVERY_MS = 60_000; // while nothing works, retry the recipes once a minute
+
+const UA_DESKTOP =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
-async function fetchZip(zip: string, parts: string[]): Promise<any[]> {
-  const params = new URLSearchParams({ fae: "true", little: "false", fts: "true", "mts.0": "regular", location: zip });
+async function fetchZip(r: Recipe, zip: string, parts: string[]): Promise<any[]> {
+  const params = new URLSearchParams({ ...r.params, location: zip });
   parts.forEach((p, i) => params.set(`parts.${i}`, p));
-  const res = await fetch(`https://www.apple.com/shop/fulfillment-messages?${params}`, {
+  const res = await fetch(`https://www.apple.com${r.path}?${params}`, {
     cache: "no-store",
     headers: {
       Accept: "application/json, text/plain, */*",
       "Accept-Language": "en-US,en;q=0.9",
-      "User-Agent":
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+      "User-Agent": UA_DESKTOP,
       Referer: "https://www.apple.com/shop/buy-iphone/iphone-duo",
+      "X-Requested-With": "XMLHttpRequest",
     },
     signal: AbortSignal.timeout(4500),
   });
   const text = await res.text();
-  const snippet = text.slice(0, 160).replace(/\s+/g, " ");
-  const label = `ZIP ${zip} [${parts.join(",")}]`;
-  if (!res.ok) {
-    console.error(`[apple] ${label}: HTTP ${res.status}. Body: ${snippet}`);
-    throw new AppleError(res.status, `Apple returned ${res.status} for ${label}`);
-  }
+  const snippet = text.slice(0, 120).replace(/\s+/g, " ");
+  const label = `${r.name} ZIP ${zip} [${parts.length} part${parts.length > 1 ? "s" : ""}]`;
+  if (!res.ok) throw new AppleError(res.status, `HTTP ${res.status} on ${label}. Body: ${snippet}`);
   let json: any;
   try {
     json = JSON.parse(text);
   } catch {
-    console.error(`[apple] ${label}: not JSON. Body: ${snippet}`);
-    throw new AppleError(0, `Apple sent a web page instead of data for ${label}`);
+    throw new AppleError(0, `Web page instead of data on ${label}. Body: ${snippet}`);
   }
-  const stores = json?.body?.content?.pickupMessage?.stores;
-  if (!Array.isArray(stores)) {
-    console.error(`[apple] ${label}: no store list. Body: ${snippet}`);
-    throw new AppleError(0, `Apple's reply had no store list for ${label}`);
-  }
+  const stores = json?.body?.content?.pickupMessage?.stores ?? json?.body?.stores;
+  if (!Array.isArray(stores)) throw new AppleError(0, `No store list on ${label}. Body: ${snippet}`);
   return stores;
+}
+
+async function findRecipe(zip: string, part: string): Promise<Recipe | null> {
+  const failures: string[] = [];
+  for (const r of RECIPES) {
+    try {
+      const stores = await fetchZip(r, zip, [part]);
+      console.log(`[apple] Recipe "${r.name}" works (${stores.length} stores). Using it from now on.`);
+      return r;
+    } catch (e: any) {
+      failures.push(`${r.name}: ${e instanceof AppleError ? (e.status || "bad reply") : "network error"}`);
+    }
+  }
+  console.error(`[apple] Every request recipe was refused (${failures.join("; ")}). Apple is most likely blocking this server.`);
+  return null;
 }
 
 function addStores(merged: Map<string, Store>, raw: any[], parts: string[]) {
@@ -81,58 +104,44 @@ function addStores(merged: Map<string, Store>, raw: any[], parts: string[]) {
   }
 }
 
-// Ask about all parts at once. If Apple refuses (541 usually means it doesn't like one
-// of the part numbers), ask about each part alone to find the bad one and skip it after.
-async function checkZip(zip: string, parts: string[], merged: Map<string, Store>) {
-  try {
-    addStores(merged, await fetchZip(zip, parts), parts);
-    return;
-  } catch (e) {
-    if (!(e instanceof AppleError) || e.status !== 541 || parts.length === 1) throw e;
-  }
-  const results = await Promise.allSettled(parts.map((p) => fetchZip(zip, [p])));
-  let okCount = 0;
-  results.forEach((r, i) => {
-    if (r.status === "fulfilled") {
-      okCount++;
-      addStores(merged, r.value, [parts[i]]);
-    } else if (r.reason instanceof AppleError && r.reason.status === 541) {
-      badParts.add(parts[i]);
-    }
-  });
-  if (okCount === 0) {
-    badParts.clear();
-    throw new Error(`Apple refused every part on its own for ZIP ${zip}, so the part numbers aren't the problem`);
-  }
-  console.error(`[apple] Skipping part numbers Apple refused: ${[...badParts].join(", ")}`);
-}
-
 async function load(): Promise<Payload> {
   const configured = MODELS.filter(isConfigured);
   if (configured.length === 0) return { ok: true, configured: false, checkedAt: Date.now(), stores: [] };
-  const parts = configured.map((m) => m.part).filter((p) => !badParts.has(p));
-  const merged = new Map<string, Store>();
-  const errors: string[] = [];
+  const parts = configured.map((m) => m.part);
 
-  // One ZIP at a time so a part-number probe on the first ZIP benefits the second.
-  for (const zip of ZIPS) {
-    try {
-      await checkZip(zip, parts.filter((p) => !badParts.has(p)), merged);
-    } catch (e: any) {
-      const msg = String(e?.message ?? e);
-      console.error(`[apple] ${msg}`);
-      errors.push(msg);
+  if (!recipe) {
+    if (Date.now() - lastProbe < PROBE_EVERY_MS) {
+      return { ok: false, configured: true, checkedAt: Date.now(), stores: [], error: "Apple is refusing requests from this server. Retrying every minute." };
+    }
+    lastProbe = Date.now();
+    recipe = await findRecipe(ZIPS[0], parts[0]);
+    if (!recipe) {
+      return { ok: false, configured: true, checkedAt: Date.now(), stores: [], error: "Apple is refusing requests from this server. Retrying every minute." };
     }
   }
 
+  const merged = new Map<string, Store>();
+  const errors: string[] = [];
+  const results = await Promise.allSettled(ZIPS.map((z) => fetchZip(recipe!, z, parts)));
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled") addStores(merged, r.value, parts);
+    else {
+      const msg = String(r.reason?.message ?? r.reason);
+      console.error(`[apple] ${msg}`);
+      errors.push(`ZIP ${ZIPS[i]}: ${msg}`);
+    }
+  });
+  if (errors.length === ZIPS.length) {
+    console.error(`[apple] Recipe "${recipe.name}" stopped working; will look for another.`);
+    recipe = null;
+  }
+
   const stores = [...merged.values()].sort((a, b) => a.distance - b.distance);
-  if (stores.length) console.log(`[apple] OK: ${stores.map((s) => `${s.name} (${s.city})`).join(", ")}`);
   return {
     ok: errors.length < ZIPS.length,
     configured: true,
     checkedAt: Date.now(),
     stores,
-    skipped: [...badParts],
     error: errors.length ? errors.join("; ") : undefined,
   };
 }
